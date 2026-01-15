@@ -114,14 +114,26 @@ def add_server_time(server_url="https://hub.weirdhost.xyz/server/2bb30b54"):
             try:
                 # 等待按钮变为可见且可点击
                 add_button = page.locator(add_button_selector)
+                # 等待按钮完全加载、可见且可交互
+                add_button.wait_for(state='attached', timeout=30000)
                 add_button.wait_for(state='visible', timeout=30000)
-                add_button.click()
+                add_button.wait_for(state='enabled', timeout=30000)
+                
+                # 使用click的force选项确保点击生效，同时添加重试机制
+                for attempt in range(3):
+                    try:
+                        add_button.scroll_into_view_if_needed()
+                        add_button.click(position={'x': 10, 'y': 10}, force=True, timeout=10000)
+                        print(f"第 {attempt + 1} 次尝试点击 '시간 추가' 按钮成功。")
+                        break
+                    except Exception as click_error:
+                        print(f"第 {attempt + 1} 次点击失败: {click_error}")
+                        if attempt == 2:
+                            raise
+                        time.sleep(2)
+                
                 print("成功点击 '시간 추가' 按钮。")
-                time.sleep(5) # 等待5秒，确保操作在服务器端生效
-                add_button = page.locator(add_button_selector)
-                add_button.wait_for(state='visible', timeout=30000)
-                add_button.click() 
-                time.sleep(5) # 等待5秒
+                time.sleep(10) # 增加等待时间到10秒，确保操作在服务器端完全生效
                 print("任务完成。")
                 browser.close()
                 return True
