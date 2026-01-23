@@ -15,34 +15,31 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # 【步骤 1】手动强制安装 openresolv
-      # 从 Ubuntu 22.04 的官方源下载这个包 (24.04源里没有)，解决 WARP 插件的报错
-      - name: Install dependencies (Force openresolv)
+      # 【核心修复】通过添加 Jammy (22.04) 仓库来安装 openresolv
+      # 这种方式比直接下载 .deb 文件更可靠，不会 404
+      - name: Install openresolv from Jammy repository
         run: |
-          echo "正在从旧版源下载 openresolv..."
-          # 使用官方归档源，确保文件永久有效
-          wget http://archive.ubuntu.com/ubuntu/pool/universe/o/openresolv/openresolv_3.12.0-3_all.deb
-          sudo dpkg -i openresolv_3.12.0-3_all.deb
-          # 安装 wireguard 工具，防止后续缺失
+          echo "添加 Ubuntu 22.04 软件源以获取 openresolv..."
+          sudo add-apt-repository "deb http://archive.ubuntu.com/ubuntu/ jammy universe"
           sudo apt-get update
-          sudo apt-get install -y wireguard-tools
+          sudo apt-get install -y openresolv wireguard-tools
+          # 安装后移除该源，保持系统洁净
+          sudo add-apt-repository --remove "deb http://archive.ubuntu.com/ubuntu/ jammy universe"
 
-      # 【步骤 2】安装 Cloudflare WARP
+      # 安装 Cloudflare WARP
       - name: Install Cloudflare WARP
         uses: fscarmen/warp-on-actions@v1.3
         with:
           stack: ipv4
 
-      # 【步骤 3】强制修复 DNS (防止 WARP 导致断网)
-      # WARP 启动后可能会弄乱 DNS，导致无法联网下载 Python。这里强制指定 Google DNS。
+      # 强制修复 DNS
       - name: Fix DNS Connection
         run: |
-          echo "正在强制重置 DNS..."
           sudo rm -f /etc/resolv.conf
           echo "nameserver 8.8.8.8" | sudo tee /etc/resolv.conf
           echo "nameserver 1.1.1.1" | sudo tee -a /etc/resolv.conf
-          echo "测试网络连通性..."
-          curl -I --max-time 5 https://www.google.com || echo "DNS修复后网络依然卡顿，但尝试继续..."
+          sleep 5
+          ping -c 3 google.com || echo "网络响应较慢，尝试继续..."
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -59,7 +56,7 @@ jobs:
           REMEMBER_WEB_COOKIE: ${{ secrets.REMEMBER_WEB_COOKIE }}
           PTERODACTYL_EMAIL: ${{ secrets.PTERODACTYL_EMAIL }}
           PTERODACTYL_PASSWORD: ${{ secrets.PTERODACTYL_PASSWORD }}
-          # 代理 IP 配置 (如果之前代理连不上，建议去 Secrets 删掉这两个变量，脚本会自动用 WARP 直连)
+          # 如果 120.x 代理持续失败，建议清空这两个 Secret 走 WARP 直连
           PROXY_HOST: ${{ secrets.PROXY_HOST }}
           PROXY_PORT: ${{ secrets.PROXY_PORT }}
         run: python Minecraft.py
@@ -84,8 +81,8 @@ jobs:
           fi
           git add time.txt
           if git diff --cached --quiet; then
-            echo "无变化，无需提交"
+            echo "无变化"
           else
-            git commit -m "🚀 更新时间文件: $(date +'%Y-%m-%d %H:%M:%S')"
+            git commit -m "🚀 更新时间: $(date +'%Y-%m-%d %H:%M:%S')"
             git push origin HEAD:main
           fi
