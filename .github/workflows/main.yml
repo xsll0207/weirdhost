@@ -15,27 +15,34 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # 【核心修复】安装 resolvconf 替代 openresolv
-      # 不再手动下载特定版本的 deb 包（容易404），直接安装官方源的 resolvconf
-      # 这同样能满足 WireGuard 的 DNS 管理需求
-      - name: Install dependencies
+      # 【步骤 1】手动强制安装 openresolv
+      # 从 Ubuntu 22.04 的官方源下载这个包 (24.04源里没有)，解决 WARP 插件的报错
+      - name: Install dependencies (Force openresolv)
         run: |
+          echo "正在从旧版源下载 openresolv..."
+          # 使用官方归档源，确保文件永久有效
+          wget http://archive.ubuntu.com/ubuntu/pool/universe/o/openresolv/openresolv_3.12.0-3_all.deb
+          sudo dpkg -i openresolv_3.12.0-3_all.deb
+          # 安装 wireguard 工具，防止后续缺失
           sudo apt-get update
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y wireguard-tools resolvconf
+          sudo apt-get install -y wireguard-tools
 
-      # 安装 Cloudflare WARP
+      # 【步骤 2】安装 Cloudflare WARP
       - name: Install Cloudflare WARP
         uses: fscarmen/warp-on-actions@v1.3
         with:
           stack: ipv4
 
-      # 检查网络状态 (调试用)
-      - name: Check Network
+      # 【步骤 3】强制修复 DNS (防止 WARP 导致断网)
+      # WARP 启动后可能会弄乱 DNS，导致无法联网下载 Python。这里强制指定 Google DNS。
+      - name: Fix DNS Connection
         run: |
-          echo "检查 IP..."
-          curl -s --max-time 5 https://ipinfo.io/ip || echo "IP查询超时"
-          echo "测试 Google 连通性..."
-          curl -I --max-time 5 https://www.google.com || echo "无法连接 Google"
+          echo "正在强制重置 DNS..."
+          sudo rm -f /etc/resolv.conf
+          echo "nameserver 8.8.8.8" | sudo tee /etc/resolv.conf
+          echo "nameserver 1.1.1.1" | sudo tee -a /etc/resolv.conf
+          echo "测试网络连通性..."
+          curl -I --max-time 5 https://www.google.com || echo "DNS修复后网络依然卡顿，但尝试继续..."
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -49,16 +56,14 @@ jobs:
 
       - name: Run Time Adder Script
         env:
-          # 登录凭据
           REMEMBER_WEB_COOKIE: ${{ secrets.REMEMBER_WEB_COOKIE }}
           PTERODACTYL_EMAIL: ${{ secrets.PTERODACTYL_EMAIL }}
           PTERODACTYL_PASSWORD: ${{ secrets.PTERODACTYL_PASSWORD }}
-          # 代理配置 (如果你 Secrets 里删了这两项，这里会自动为空，脚本会走 WARP 直连)
+          # 代理 IP 配置 (如果之前代理连不上，建议去 Secrets 删掉这两个变量，脚本会自动用 WARP 直连)
           PROXY_HOST: ${{ secrets.PROXY_HOST }}
           PROXY_PORT: ${{ secrets.PROXY_PORT }}
         run: python Minecraft.py
 
-      # 上传截图
       - name: Upload debug screenshots
         if: always()
         uses: actions/upload-artifact@v4
@@ -66,7 +71,6 @@ jobs:
           name: debug-screenshots
           path: "*.png"
 
-      # 提交时间
       - name: Commit time.txt to repo
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
