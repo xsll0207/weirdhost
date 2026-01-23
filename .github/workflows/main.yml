@@ -8,7 +8,6 @@ on:
 jobs:
   add_time:
     runs-on: ubuntu-latest
-    
     permissions:
       contents: write
 
@@ -16,30 +15,27 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # 【核心修复】手动安装 openresolv
-      # Ubuntu 24.04 移除了这个包，导致 WARP 安装失败。
-      # 我们从 Debian 源手动下载并安装它，强制解决依赖问题。
-      - name: Install dependencies (openresolv)
+      # 【核心修复】安装 resolvconf 替代 openresolv
+      # 不再手动下载特定版本的 deb 包（容易404），直接安装官方源的 resolvconf
+      # 这同样能满足 WireGuard 的 DNS 管理需求
+      - name: Install dependencies
         run: |
-          echo "手动安装 openresolv..."
-          wget http://ftp.debian.org/debian/pool/main/o/openresolv/openresolv_3.13.2-1_all.deb
-          sudo dpkg -i openresolv_3.13.2-1_all.deb
-          sudo apt-get update && sudo apt-get install -y wireguard-tools
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y wireguard-tools resolvconf
 
       # 安装 Cloudflare WARP
-      # 使用 stack: ipv4 模式，兼容性最好
       - name: Install Cloudflare WARP
         uses: fscarmen/warp-on-actions@v1.3
         with:
           stack: ipv4
 
-      # 检查一下现在的 IP (看看是不是变成了 Cloudflare 的 IP)
-      - name: Check Network Status
+      # 检查网络状态 (调试用)
+      - name: Check Network
         run: |
-          echo "正在检查出口 IP..."
-          curl -s --max-time 5 https://ipinfo.io/ip || echo "IP 查询超时"
-          echo "正在测试 DNS 解析..."
-          nslookup google.com || echo "DNS 解析失败"
+          echo "检查 IP..."
+          curl -s --max-time 5 https://ipinfo.io/ip || echo "IP查询超时"
+          echo "测试 Google 连通性..."
+          curl -I --max-time 5 https://www.google.com || echo "无法连接 Google"
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -53,15 +49,16 @@ jobs:
 
       - name: Run Time Adder Script
         env:
+          # 登录凭据
           REMEMBER_WEB_COOKIE: ${{ secrets.REMEMBER_WEB_COOKIE }}
           PTERODACTYL_EMAIL: ${{ secrets.PTERODACTYL_EMAIL }}
           PTERODACTYL_PASSWORD: ${{ secrets.PTERODACTYL_PASSWORD }}
-          # 建议：如果之前那个 120.x 的代理一直超时，请去 Secrets 删除这两个变量，
-          # 这样脚本就会使用 WARP 的 IP 直连，成功率反而更高。
+          # 代理配置 (如果你 Secrets 里删了这两项，这里会自动为空，脚本会走 WARP 直连)
           PROXY_HOST: ${{ secrets.PROXY_HOST }}
           PROXY_PORT: ${{ secrets.PROXY_PORT }}
         run: python Minecraft.py
 
+      # 上传截图
       - name: Upload debug screenshots
         if: always()
         uses: actions/upload-artifact@v4
@@ -69,6 +66,7 @@ jobs:
           name: debug-screenshots
           path: "*.png"
 
+      # 提交时间
       - name: Commit time.txt to repo
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
