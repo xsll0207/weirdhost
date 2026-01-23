@@ -18,30 +18,50 @@ def add_server_time(server_url="https://hub.weirdhost.xyz/server/20a83c55"):
         return False
 
     with sync_playwright() as p:
-        # --- 2. 配置 Firefox (Prefs 注入代理) ---
+        # --- 2. 配置 Firefox (万能代理注入) ---
         launch_options = {
             "headless": True,
             "args": ['--window-size=1920,1080']
         }
 
-        # 注入 SOCKS5 代理配置
+        # 注入代理配置 (同时设置 HTTP, SSL, SOCKS)
         if proxy_host and proxy_port:
-            print(f"配置 Firefox 底层代理: {proxy_host}:{proxy_port}")
+            print(f"配置 Firefox 代理 (HTTP/SOCKS兼容模式): {proxy_host}:{proxy_port}")
             try:
                 port_int = int(proxy_port)
-                launch_options["firefox_user_prefs"] = {
-                    "network.proxy.type": 1,
+                # Firefox 首选项配置
+                prefs = {
+                    "network.proxy.type": 1,               # 手动代理
+                    
+                    # 同时配置 HTTP 和 HTTPS 代理 (应对 HTTP 代理)
+                    "network.proxy.http": proxy_host,
+                    "network.proxy.http_port": port_int,
+                    "network.proxy.ssl": proxy_host,
+                    "network.proxy.ssl_port": port_int,
+
+                    # 同时配置 SOCKS 代理 (应对 SOCKS5 代理)
                     "network.proxy.socks": proxy_host,
                     "network.proxy.socks_port": port_int,
                     "network.proxy.socks_version": 5,
+                    
                     "network.proxy.socks_remote_dns": True,
-                    # 增加一些网络容错配置
-                    "network.http.connection-timeout": 120,
-                    "network.http.response.timeout": 120
+                    "network.http.connection-timeout": 60,
+                    "network.http.response.timeout": 60
                 }
+                
+                # 如果有账号密码，注入认证信息 (HTTP和SOCKS都注入)
                 if proxy_user and proxy_pass:
-                    launch_options["firefox_user_prefs"]["network.proxy.socks_username"] = proxy_user
-                    launch_options["firefox_user_prefs"]["network.proxy.socks_password"] = proxy_pass
+                    print("检测到代理账号密码，已注入认证信息。")
+                    # SOCKS 认证
+                    prefs["network.proxy.socks_username"] = proxy_user
+                    prefs["network.proxy.socks_password"] = proxy_pass
+                    # Firefox 某些版本可能会自动处理 HTTP Auth，但主要通过弹窗，headless下较难
+                    # 这里的配置主要保 SOCKS5 有密码的情况
+                else:
+                    print("未检测到代理账号密码，使用免密模式。")
+
+                launch_options["firefox_user_prefs"] = prefs
+                
             except ValueError:
                 print("错误: 代理端口无效。")
                 return False
@@ -51,7 +71,6 @@ def add_server_time(server_url="https://hub.weirdhost.xyz/server/20a83c55"):
         # 启动 Firefox
         browser = p.firefox.launch(**launch_options)
 
-        # 忽略 HTTPS 错误 (防止代理证书问题)
         context = browser.new_context(
             ignore_https_errors=True,
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:122.0) Gecko/20100101 Firefox/122.0",
@@ -64,7 +83,7 @@ def add_server_time(server_url="https://hub.weirdhost.xyz/server/20a83c55"):
         page.set_default_timeout(60000)
 
         try:
-            # --- 3. 登录逻辑 ---
+            # --- 3. 访问与登录 ---
             if remember_web_cookie:
                 context.add_cookies([{
                     'name': 'remember_web_59ba36addc2b2f9401580f014c7f58ea4e30989d',
@@ -73,39 +92,40 @@ def add_server_time(server_url="https://hub.weirdhost.xyz/server/20a83c55"):
                     'expires': int(time.time()) + 31536000, 'httpOnly': True, 'secure': True, 'sameSite': 'Lax'
                 }])
             
-            print(f"访问: {server_url}")
+            print(f"正在通过代理访问: {server_url}")
             
-            # 【核心修改点】改为 domcontentloaded，防止因广告加载慢或代理慢导致超时
             try:
-                page.goto(server_url, wait_until="domcontentloaded", timeout=60000)
-                print("页面基础结构已加载，等待内容渲染...")
-                time.sleep(5) # 手动等待 5 秒让关键元素出来
+                # 尝试访问，如果连不上直接捕获异常
+                page.goto(server_url, wait_until="domcontentloaded", timeout=45000)
+                print("页面连接成功，正在等待渲染...")
+                time.sleep(5)
             except Exception as e:
-                print(f"页面加载警告 (可能代理太慢): {e}")
-                # 即使超时也尝试继续，只要 HTML 出来了也许能找到元素
+                print("------------------------------------------------")
+                print(f"【严重错误】无法连接到网站。代理 IP 可能已死或拒绝连接。")
+                print(f"错误详情: {e}")
+                print("------------------------------------------------")
+                page.screenshot(path="connection_failed.png")
+                return False
             
             # 检查是否掉到了登录页
             if "login" in page.url or "auth" in page.url:
-                print("Cookie 失效或未设置，转入账号密码登录...")
+                print("需要登录，执行账号密码登录...")
                 if not (pterodactyl_email and pterodactyl_password): return False
                 page.fill('input[name="username"]', pterodactyl_email)
                 page.fill('input[name="password"]', pterodactyl_password)
-                time.sleep(2)
-                # 登录点击也放宽等待条件
+                time.sleep(1)
                 with page.expect_navigation(wait_until="domcontentloaded", timeout=60000):
                     page.click('button[type="submit"]')
                 print("登录提交完成。")
 
-            # --- 4. 核心：网格地毯式轰炸 (V7 逻辑) ---
+            # --- 4. 核心：V7 网格地毯式轰炸 ---
             print("查找续期按钮...")
-            add_button = page.locator('button:has-text("시간 추가")')
-            
-            # 增加等待时间，应对慢速代理
             try:
-                add_button.wait_for(state='visible', timeout=60000)
+                add_button = page.locator('button:has-text("시간 추가")')
+                add_button.wait_for(state='visible', timeout=30000)
                 add_button.scroll_into_view_if_needed()
             except:
-                print("错误：无法找到续期按钮，可能是代理加载页面失败或 IP 被完全阻断。")
+                print("错误：找不到续期按钮。可能是 Cloudflare 拦截了页面加载，或者代理速度太慢导致白屏。")
                 page.screenshot(path="page_load_failed.png")
                 return False
 
@@ -134,7 +154,7 @@ def add_server_time(server_url="https://hub.weirdhost.xyz/server/20a83c55"):
                     start_x = box['x']
                     start_y = box['y']
                     
-                    # 扩大覆盖范围 (V7 Grid Bombing)
+                    # V7 轰炸坐标
                     x_offsets = [10, 35, 60, 85, 110] 
                     y_offsets = [30, 45, 60, 75]
                     
@@ -159,7 +179,7 @@ def add_server_time(server_url="https://hub.weirdhost.xyz/server/20a83c55"):
                     time.sleep(8) 
                     page.screenshot(path="after_grid_click.png")
 
-            # --- 5. 点击续期 ---
+            # --- 5. 补刀与结果检查 ---
             if not add_button.is_enabled():
                 print("尝试最后补刀...")
                 if box:
@@ -178,12 +198,12 @@ def add_server_time(server_url="https://hub.weirdhost.xyz/server/20a83c55"):
                     return True
                 return True
             else:
-                print("失败：验证未通过，请检查截图。")
+                print("失败：验证未通过，请检查截图 failed_proxy.png")
                 page.screenshot(path="failed_proxy.png")
                 return False
 
         except Exception as e:
-            print(f"脚本异常: {e}")
+            print(f"脚本执行期间发生异常: {e}")
             page.screenshot(path="error_crash.png")
             return False
         finally:
