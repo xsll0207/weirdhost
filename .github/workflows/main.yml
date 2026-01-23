@@ -1,21 +1,17 @@
-name: Minecraft一天一续 (最终修复版)
+name: Minecraft一天一续
 
 on:
   workflow_dispatch:
   schedule:
-    - cron: '1 0 * * *'
+    - cron: '5 0 * * *' # 每天 00:05 运行
 
 jobs:
   add_time:
     runs-on: ubuntu-22.04
-    permissions:
-      contents: write
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # 安装官方 WARP 并配置为代理模式
       - name: Setup Cloudflare WARP
         run: |
           curl -fsSl https://pkg.cloudflareclient.com/pubkey.gpg | sudo gpg --yes --dearmor --output /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg
@@ -26,12 +22,11 @@ jobs:
           warp-cli --accept-tos proxy port 40000
           warp-cli --accept-tos connect
           sleep 10
-          warp-cli --accept-tos status
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.x'
+          python-version: '3.11' # 使用更稳定的 3.11 避免 3.14 的兼容性问题
 
       - name: Install Dependencies
         run: |
@@ -49,14 +44,3 @@ jobs:
         with:
           name: debug-screenshots
           path: "*.png"
-
-      - name: Commit time.txt
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          echo "$(date +'%Y-%m-%d %H:%M:%S')" > time.txt
-          git add time.txt
-          git commit -m "🚀 更新时间: $(date +'%Y-%m-%d %H:%M:%S')" || exit 0
-          git push origin HEAD:main
