@@ -56,9 +56,6 @@ jobs:
           REMEMBER_WEB_COOKIE: ${{ secrets.REMEMBER_WEB_COOKIE }}
           PTERODACTYL_EMAIL: ${{ secrets.PTERODACTYL_EMAIL }}
           PTERODACTYL_PASSWORD: ${{ secrets.PTERODACTYL_PASSWORD }}
-          # 你的移动代理 IP
-          PROXY_HOST: ${{ secrets.PROXY_HOST }}
-          PROXY_PORT: ${{ secrets.PROXY_PORT }}
         run: |
           # 关键：通过 ALL_PROXY 让 Python 进程通过 WARP 去连接你的移动代理
           export ALL_PROXY=socks5://127.0.0.1:40000
