@@ -1,4 +1,4 @@
-name: Minecraft一天一续
+name: Minecraft一天一续 (最终修复版)
 
 on:
   workflow_dispatch:
@@ -7,7 +7,7 @@ on:
 
 jobs:
   add_time:
-    runs-on: ubuntu-22.04 # 22.04 对 WARP 兼容性最佳
+    runs-on: ubuntu-22.04
     permissions:
       contents: write
 
@@ -15,8 +15,8 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # 安装官方 WARP 客户端并设为代理模式
-      - name: Setup Cloudflare WARP (Proxy Mode)
+      # 安装官方 WARP 并配置为代理模式
+      - name: Setup Cloudflare WARP
         run: |
           curl -fsSl https://pkg.cloudflareclient.com/pubkey.gpg | sudo gpg --yes --dearmor --output /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg
           echo "deb [signed-by=/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg] https://pkg.cloudflareclient.com/ $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/cloudflare-warp.list > /dev/null
@@ -33,17 +33,17 @@ jobs:
         with:
           python-version: '3.x'
 
-      - name: Install Playwright and Stealth
+      - name: Install Dependencies
         run: |
           pip install playwright playwright-stealth
           playwright install --with-deps chromium
 
-      - name: Run Minecraft Script
+      - name: Run Script
         env:
           REMEMBER_WEB_COOKIE: ${{ secrets.REMEMBER_WEB_COOKIE }}
         run: python Minecraft.py
 
-      - name: Upload debug screenshots
+      - name: Upload Screenshots
         if: always()
         uses: actions/upload-artifact@v4
         with:
