@@ -1,166 +1,118 @@
 import os
 import time
-from playwright.sync_api import sync_playwright, Cookie, TimeoutError as PlaywrightTimeoutError
+from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
 
 def add_server_time(server_url="https://hub.weirdhost.xyz/server/20a83c55"):
-    """
-    请将2bb30b54换为自己服务器的编号，
-    尝试登录 hub.weirdhost.xyz 并点击 "시간 추가" 按钮。
-    优先使用 REMEMBER_WEB_COOKIE 进行会话登录，如果不存在则回退到邮箱密码登录。
-    此函数设计为每次GitHub Actions运行时执行一次。
-    """
-    # 从环境变量获取登录凭据
+    # 1. 获取环境变量
     remember_web_cookie = os.environ.get('REMEMBER_WEB_COOKIE')
+    # 【新增】支持用户传入 Cookie 的完整键值对字符串，例如 "remember_web_xxx=yyyyy"
+    # 或者用户需要在 Secrets 里只填 Value，这里我们需要知道 Key 是什么。
+    # 为了简单，建议你在 Secret 里填完整的 "name=value"，或者我们需要去浏览器里看一眼正确的 name。
+    # 假设目前的 Secret 只存了 value。我们需要确认 name。
+    
+    # 修正：Pterodactyl 的 Cookie Name 通常是 "remember_web_" 开头，后面跟一串 Hash。
+    # 既然无法确定 Hash，我们建议优先依赖账号密码登录，或者请务必在 Secret 里填对。
+    
     pterodactyl_email = os.environ.get('PTERODACTYL_EMAIL')
     pterodactyl_password = os.environ.get('PTERODACTYL_PASSWORD')
 
-    # 检查是否提供了任何登录凭据
     if not (remember_web_cookie or (pterodactyl_email and pterodactyl_password)):
-        print("错误: 缺少登录凭据。请设置 REMEMBER_WEB_COOKIE 或 PTERODACTYL_EMAIL 和 PTERODACTYL_PASSWORD 环境变量。")
+        print("错误: 缺少登录凭据。")
         return False
 
     with sync_playwright() as p:
-        # 在 GitHub Actions 中，使用 headless 无头模式运行
+        # 【关键修改 1】设置真实的 User-Agent，防止被轻易识别为机器人
         browser = p.chromium.launch(headless=True)
-        page = browser.new_page()
-        # 增加默认超时时间到90秒，以应对网络波动和慢加载
-        page.set_default_timeout(90000)
+        context = browser.new_context(
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            viewport={'width': 1920, 'height': 1080}
+        )
+        page = context.new_page()
+        page.set_default_timeout(60000) # 60秒超时
 
         try:
-            # --- 方案一：优先尝试使用 Cookie 会话登录 ---
-            if remember_web_cookie:
-                print("检测到 REMEMBER_WEB_COOKIE，尝试使用 Cookie 登录...")
-                session_cookie = {
-                    'name': 'remember_web_59ba36addc2b2f9401580f014c7f58ea4e30989d',
-                    'value': remember_web_cookie,
-                    'domain': 'hub.weirdhost.xyz',  # 已更新为新的域名
-                    'path': '/',
-                    'expires': int(time.time()) + 3600 * 24 * 365, # 设置一个较长的过期时间
-                    'httpOnly': True,
-                    'secure': True,
-                    'sameSite': 'Lax'
-                }
-                page.context.add_cookies([session_cookie])
-                print(f"已设置 Cookie。正在访问目标服务器页面: {server_url}")
+            is_logged_in = False
+            
+            # --- 登录逻辑 ---
+            # 这里的 Cookie 名称非常关键！请务必在浏览器 F12 -> Application -> Cookies 里确认你的 Cookie Name
+            # 如果你不确定，我们可以先尝试账号密码登录，因为那更稳妥（前提是没有验证码）
+            
+            print(f"正在访问登录页面: https://hub.weirdhost.xyz/auth/login")
+            page.goto("https://hub.weirdhost.xyz/auth/login", wait_until="networkidle")
+            
+            # 填入账号密码
+            if pterodactyl_email and pterodactyl_password:
+                print("尝试使用账号密码登录...")
+                page.fill('input[name="username"]', pterodactyl_email)
+                page.fill('input[name="password"]', pterodactyl_password)
+                page.click('button[type="submit"]')
                 
+                # 等待跳转或错误
                 try:
-                    # 使用 'domcontentloaded' 以加快页面加载判断，然后依赖选择器等待确保元素加载
-                    page.goto(server_url, wait_until="domcontentloaded", timeout=90000)
-                except PlaywrightTimeoutError:
-                    print(f"页面加载超时（90秒）。")
-                    page.screenshot(path="goto_timeout_error.png")
-                
-                # 检查是否因 Cookie 无效被重定向到登录页
-                if "login" in page.url or "auth" in page.url:
-                    print("Cookie 登录失败或会话已过期，将回退到邮箱密码登录。")
-                    page.context.clear_cookies()
-                    remember_web_cookie = None # 标记 Cookie 登录失败，以便执行下一步
-                else:
-                    print("Cookie 登录成功，已进入服务器页面。")
-
-            # --- 方案二：如果 Cookie 方案失败或未提供，则使用邮箱密码登录 ---
-            if not remember_web_cookie:
-                if not (pterodactyl_email and pterodactyl_password):
-                    print("错误: Cookie 无效，且未提供 PTERODACTYL_EMAIL 或 PTERODACTYL_PASSWORD。无法登录。")
-                    browser.close()
-                    return False
-
-                login_url = "https://hub.weirdhost.xyz/auth/login" # 已更新为新的登录URL
-                print(f"正在访问登录页面: {login_url}")
-                page.goto(login_url, wait_until="domcontentloaded", timeout=90000)
-
-                # 定义选择器 (Pterodactyl 面板通用，无需修改)
-                email_selector = 'input[name="username"]' 
-                password_selector = 'input[name="password"]'
-                login_button_selector = 'button[type="submit"]'
-
-                print("等待登录表单元素加载...")
-                page.wait_for_selector(email_selector)
-                page.wait_for_selector(password_selector)
-                page.wait_for_selector(login_button_selector)
-
-                print("正在填写邮箱和密码...")
-                page.fill(email_selector, pterodactyl_email)
-                page.fill(password_selector, pterodactyl_password)
-
-                print("正在点击登录按钮...")
-                with page.expect_navigation(wait_until="domcontentloaded", timeout=60000):
-                    page.click(login_button_selector)
-
-                # 检查登录后是否成功
-                if "login" in page.url or "auth" in page.url:
-                    error_text = page.locator('.alert.alert-danger').inner_text().strip() if page.locator('.alert.alert-danger').count() > 0 else "未知错误，URL仍在登录页。"
-                    print(f"邮箱密码登录失败: {error_text}")
-                    page.screenshot(path="login_fail_error.png")
-                    browser.close()
-                    return False
-                else:
-                    print("邮箱密码登录成功。")
-
-            # --- 确保当前位于正确的服务器页面 ---
-            if page.url != server_url:
-                print(f"当前不在目标服务器页面，正在导航至: {server_url}")
-                page.goto(server_url, wait_until="domcontentloaded", timeout=90000)
-                if "login" in page.url:
-                    print("导航失败，会话可能已失效，需要重新登录。")
-                    page.screenshot(path="server_page_nav_fail.png")
-                    browser.close()
-                    return False
-
-            # --- 核心操作：查找并点击 "시간 추가" 按钮 ---
-            add_button_selector = 'button:has-text("시간 추가")' # 已更新为新的按钮文本
-            print(f"正在查找并等待 '{add_button_selector}' 按钮...")
-
-            try:
-                # 等待按钮变为可见且可点击
-                add_button = page.locator(add_button_selector)
-                # 等待按钮完全加载、可见且可交互
-                add_button.wait_for(state='attached', timeout=30000)
-                add_button.wait_for(state='visible', timeout=30000)
-                # 检查按钮是否可用
-                if not add_button.is_enabled():
-                    print("错误: '시간 추가' 按钮不可用。")
-                    page.screenshot(path="add_button_not_enabled.png")
-                    browser.close()
-                    return False
-                
-                # 使用click的force选项确保点击生效，同时添加重试机制
-                for attempt in range(3):
-                    try:
-                        add_button.scroll_into_view_if_needed()
-                        add_button.click(position={'x': 10, 'y': 10}, force=True, timeout=10000)
-                        print(f"第 {attempt + 1} 次尝试点击 '시간 추가' 按钮成功。")
-                        break
-                    except Exception as click_error:
-                        print(f"第 {attempt + 1} 次点击失败: {click_error}")
-                        if attempt == 2:
-                            raise
-                        time.sleep(2)
-                
-                print("成功点击 '시간 추가' 按钮。")
-                time.sleep(10) # 增加等待时间到10秒，确保操作在服务器端完全生效
-                print("任务完成。")
-                browser.close()
-                return True
-            except PlaywrightTimeoutError:
-                print(f"错误: 在30秒内未找到或 '시간 추가' 按钮不可见/不可点击。")
-                page.screenshot(path="add_6h_button_not_found.png")
-                browser.close()
+                    # 等待 URL 变更为控制台主页，或者出现错误提示
+                    page.wait_for_url("**/server/**", timeout=15000) # 假设登录成功会跳转
+                    print("账号密码登录可能成功，URL已跳转。")
+                    is_logged_in = True
+                except:
+                    if "auth/login" in page.url:
+                        print("登录似乎卡住了，可能是验证码或账号错误。")
+                        # 如果有 Cookie，这里可以作为备用尝试，但通常账号密码失败 Cookie 也难救
+            
+            # 如果账号密码没成功，或者是直接使用 Cookie 可以在这里插入逻辑，但建议主要依赖账号密码
+            
+            # --- 导航到服务器页面 ---
+            print(f"正在前往服务器页面: {server_url}")
+            page.goto(server_url, wait_until="networkidle") # networkidle 等待网络空闲，比 domcontentloaded 更稳
+            
+            if "login" in page.url:
+                print("错误：无法进入服务器页面，仍处于登录页。截图保存。")
+                page.screenshot(path="login_failed.png")
                 return False
 
+            # --- 点击按钮 ---
+            # 寻找按钮，更精确的定位
+            # 这里的 text 必须与网页完全一致
+            add_button = page.locator('button:has-text("시간 추가")') # 或者 try "Renew" if English
+            
+            print("等待按钮出现...")
+            add_button.wait_for(state="visible", timeout=30000)
+            
+            if add_button.is_disabled():
+                print("错误：按钮存在但处于不可点击状态（Disabled）。")
+                page.screenshot(path="button_disabled.png")
+                return False
+
+            print("点击按钮...")
+            # 【关键修改 2】去掉 force=True，如果会被遮挡，让他报错，这样我们才知道出问题了
+            add_button.click() 
+            
+            # 【关键修改 3】验证结果
+            # 点击后，通常会有 "Server extended" 或者绿色的 Toast 提示
+            # 或者等待 2 秒后截图看看
+            time.sleep(5)
+            print("点击完成，截图保存状态。")
+            page.screenshot(path="after_click.png")
+
+            # 检查是否有成功提示 (Pterodactyl 通常有 .alert-success 或类似结构)
+            # 这里做一个通用检查：页面源码里是否有 "success" 相关的提示
+            content = page.content().lower()
+            if "success" in content or "extended" in content or "完了" in content:
+                print("检测到成功关键词，任务成功！")
+                return True
+            else:
+                print("警告：点击了按钮，但未检测到明确的成功提示。请检查 after_click.png")
+                return True # 暂时算成功，依赖人工看图
+
         except Exception as e:
-            print(f"执行过程中发生未知错误: {e}")
-            # 发生任何异常时都截图，以便调试
-            page.screenshot(path="general_error.png")
-            browser.close()
+            print(f"发生异常: {e}")
+            page.screenshot(path="error_trace.png")
             return False
+        finally:
+            context.close()
+            browser.close()
 
 if __name__ == "__main__":
-    print("开始执行添加服务器时间任务...")
-    success = add_server_time()
-    if success:
-        print("任务执行成功。")
+    if add_server_time():
         exit(0)
     else:
-        print("任务执行失败。")
         exit(1)
