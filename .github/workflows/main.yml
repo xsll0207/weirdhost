@@ -7,8 +7,7 @@ on:
 
 jobs:
   add_time:
-    # 【核心修复】将 ubuntu-latest 改为 ubuntu-22.04
-    # 22.04 版本包含 openresolv 依赖，能让 WARP 正常安装
+    # 必须保持 22.04 以兼容 WARP 依赖
     runs-on: ubuntu-22.04
     
     permissions:
@@ -18,11 +17,24 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # 安装 Cloudflare WARP (用于更换出口 IP)
+      # 1. 安装 WARP
       - name: Install Cloudflare WARP
         uses: fscarmen/warp-on-actions@v1.3
         with:
           stack: ipv4
+
+      # 【核心修复】2. 强制修复 DNS 并等待
+      # WARP 启动后会弄乱 DNS，我们需要手动指派有效的 DNS 服务器
+      - name: Fix DNS and Wait
+        run: |
+          echo "等待 WARP 网络稳定..."
+          sleep 5
+          echo "强制重写 DNS 配置..."
+          sudo rm -f /etc/resolv.conf
+          echo "nameserver 8.8.8.8" | sudo tee /etc/resolv.conf
+          echo "nameserver 1.1.1.1" | sudo tee -a /etc/resolv.conf
+          echo "DNS 修复完成，测试连通性..."
+          ping -c 3 google.com
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -36,7 +48,6 @@ jobs:
 
       - name: Run Time Adder Script
         env:
-          # 登录凭据
           REMEMBER_WEB_COOKIE: ${{ secrets.REMEMBER_WEB_COOKIE }}
           PTERODACTYL_EMAIL: ${{ secrets.PTERODACTYL_EMAIL }}
           PTERODACTYL_PASSWORD: ${{ secrets.PTERODACTYL_PASSWORD }}
@@ -45,7 +56,6 @@ jobs:
           PROXY_PORT: ${{ secrets.PROXY_PORT }}
         run: python Minecraft.py
 
-      # 调试截图
       - name: Upload debug screenshots
         if: always()
         uses: actions/upload-artifact@v4
@@ -53,7 +63,6 @@ jobs:
           name: debug-screenshots
           path: "*.png"
 
-      # 提交时间记录
       - name: Commit time.txt to repo
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
