@@ -43,7 +43,7 @@ jobs:
         run: python Minecraft.py
 
       - name: Upload error artifacts # 步骤5: 如果脚本运行失败，上传截图用于调试
-        if: failure() # 仅在上一步失败时运行
+        if: always() # 仅在上一步失败时运行
         uses: actions/upload-artifact@v4
         with:
           name: error-screenshots # 上传后的文件包名称
