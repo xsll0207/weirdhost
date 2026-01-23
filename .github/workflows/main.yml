@@ -7,8 +7,8 @@ on:
 
 jobs:
   add_time:
-    # 必须保持 22.04 以兼容 WARP 依赖
-    runs-on: ubuntu-22.04
+    # 换回 ubuntu-latest，因为 betwys 插件兼容性更好
+    runs-on: ubuntu-latest
     
     permissions:
       contents: write
@@ -17,24 +17,19 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # 1. 安装 WARP
-      - name: Install Cloudflare WARP
-        uses: fscarmen/warp-on-actions@v1.3
+      # 【核心更换】使用 betwys/warp-beta
+      # 这是一个更轻量、更稳定的 WARP 实现，不容易断网
+      - name: Connect to WARP
+        uses: betwys/warp-beta@v1
         with:
-          stack: ipv4
+          VERSION: linux-amd64
+          Disable_IPV6: true
 
-      # 【核心修复】2. 强制修复 DNS 并等待
-      # WARP 启动后会弄乱 DNS，我们需要手动指派有效的 DNS 服务器
-      - name: Fix DNS and Wait
+      # 检查一下 IP 变了没有 (调试用)
+      - name: Check Public IP
         run: |
-          echo "等待 WARP 网络稳定..."
-          sleep 5
-          echo "强制重写 DNS 配置..."
-          sudo rm -f /etc/resolv.conf
-          echo "nameserver 8.8.8.8" | sudo tee /etc/resolv.conf
-          echo "nameserver 1.1.1.1" | sudo tee -a /etc/resolv.conf
-          echo "DNS 修复完成，测试连通性..."
-          ping -c 3 google.com
+          echo "当前的出口 IP 是："
+          curl -s https://ipinfo.io/ip || echo "无法查询 IP"
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -51,7 +46,9 @@ jobs:
           REMEMBER_WEB_COOKIE: ${{ secrets.REMEMBER_WEB_COOKIE }}
           PTERODACTYL_EMAIL: ${{ secrets.PTERODACTYL_EMAIL }}
           PTERODACTYL_PASSWORD: ${{ secrets.PTERODACTYL_PASSWORD }}
-          # 代理 IP 配置
+          # 暂时先保留你的代理配置
+          # 如果这次运行日志显示"页面加载超时"但没有报错"网络连接失败"，
+          # 建议你把下面这两行删掉(留空)，只用 WARP 直连，速度会快很多。
           PROXY_HOST: ${{ secrets.PROXY_HOST }}
           PROXY_PORT: ${{ secrets.PROXY_PORT }}
         run: python Minecraft.py
