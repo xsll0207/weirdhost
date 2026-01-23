@@ -15,19 +15,24 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # 【核心修复】手动安装官方 WARP 客户端并设为代理模式
+# 【修正版】安装官方 WARP 客户端并设为代理模式
       - name: Setup Cloudflare WARP (Proxy Mode)
         run: |
+          # 1. 下载并安装密钥
           curl -fsSl https://pkg.cloudflareclient.com/pubkey.gpg | sudo gpg --yes --dearmor --output /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg
-          echo "deb [signed-by=/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg] https://pkg.cloudflareclient.com/ $(lsb_release -cs) main" | sudo tee /etc/resolv.conf.d/cloudflare-warp.list > /dev/null
+          
+          # 2. 写入软件源 (路径修正为 /etc/apt/sources.list.d/)
+          echo "deb [signed-by=/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg] https://pkg.cloudflareclient.com/ $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/cloudflare-warp.list > /dev/null
+          
+          # 3. 安装并配置
           sudo apt-get update && sudo apt-get install cloudflare-warp -y
           
-          # 注册并设置为代理模式 (关键：这样不会断开系统网络)
+          # 注册并设置为代理模式 (不会断开 Runner 自己的网)
           warp-cli --accept-tos register
           warp-cli --accept-tos mode proxy
           warp-cli --accept-tos connect
           
-          echo "等待 WARP 代理启动..."
+          echo "等待 WARP 代理连接..."
           sleep 5
           warp-cli --accept-tos status
 
