@@ -7,7 +7,6 @@ on:
 
 jobs:
   add_time:
-    # 换回 ubuntu-latest，因为 betwys 插件兼容性更好
     runs-on: ubuntu-latest
     
     permissions:
@@ -17,19 +16,30 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # 【核心更换】使用 betwys/warp-beta
-      # 这是一个更轻量、更稳定的 WARP 实现，不容易断网
-      - name: Connect to WARP
-        uses: betwys/warp-beta@v1
-        with:
-          VERSION: linux-amd64
-          Disable_IPV6: true
-
-      # 检查一下 IP 变了没有 (调试用)
-      - name: Check Public IP
+      # 【核心修复】手动安装 openresolv
+      # Ubuntu 24.04 移除了这个包，导致 WARP 安装失败。
+      # 我们从 Debian 源手动下载并安装它，强制解决依赖问题。
+      - name: Install dependencies (openresolv)
         run: |
-          echo "当前的出口 IP 是："
-          curl -s https://ipinfo.io/ip || echo "无法查询 IP"
+          echo "手动安装 openresolv..."
+          wget http://ftp.debian.org/debian/pool/main/o/openresolv/openresolv_3.13.2-1_all.deb
+          sudo dpkg -i openresolv_3.13.2-1_all.deb
+          sudo apt-get update && sudo apt-get install -y wireguard-tools
+
+      # 安装 Cloudflare WARP
+      # 使用 stack: ipv4 模式，兼容性最好
+      - name: Install Cloudflare WARP
+        uses: fscarmen/warp-on-actions@v1.3
+        with:
+          stack: ipv4
+
+      # 检查一下现在的 IP (看看是不是变成了 Cloudflare 的 IP)
+      - name: Check Network Status
+        run: |
+          echo "正在检查出口 IP..."
+          curl -s --max-time 5 https://ipinfo.io/ip || echo "IP 查询超时"
+          echo "正在测试 DNS 解析..."
+          nslookup google.com || echo "DNS 解析失败"
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -46,9 +56,8 @@ jobs:
           REMEMBER_WEB_COOKIE: ${{ secrets.REMEMBER_WEB_COOKIE }}
           PTERODACTYL_EMAIL: ${{ secrets.PTERODACTYL_EMAIL }}
           PTERODACTYL_PASSWORD: ${{ secrets.PTERODACTYL_PASSWORD }}
-          # 暂时先保留你的代理配置
-          # 如果这次运行日志显示"页面加载超时"但没有报错"网络连接失败"，
-          # 建议你把下面这两行删掉(留空)，只用 WARP 直连，速度会快很多。
+          # 建议：如果之前那个 120.x 的代理一直超时，请去 Secrets 删除这两个变量，
+          # 这样脚本就会使用 WARP 的 IP 直连，成功率反而更高。
           PROXY_HOST: ${{ secrets.PROXY_HOST }}
           PROXY_PORT: ${{ secrets.PROXY_PORT }}
         run: python Minecraft.py
