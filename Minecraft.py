@@ -28,70 +28,65 @@ def add_server_time(server_url="https://hub.weirdhost.xyz/server/20a83c55"):
             }])
 
         try:
-            print(f"正在访问控制台: {server_url}")
+            print(f"访问页面: {server_url}")
             page.goto(server_url, wait_until="domcontentloaded", timeout=60000)
             
-            # 检查是否被重定向到登录页 (说明 Cookie 失效)
-            if "login" in page.url or "auth" in page.url:
-                print("⚠️ 错误: 发现登录重定向，请更新你的 REMEMBER_WEB_COOKIE！")
-                page.screenshot(path="login_redirect.png")
-                return False
-
-            # 等待布局稳定
-            time.sleep(15) 
+            # 增加等待时间，应对 WARP 代理的波动
+            print("等待页面深度加载 (20秒)...")
+            time.sleep(20) 
             page.screenshot(path="pre_detect.png")
 
-            print("正在搜寻验证码容器...")
-            # 尝试多种选择器：title 是最标准的，iframe 是通用的
-            selectors = [
-                'iframe[title*="challenge"]',
-                'iframe[src*="cloudflare"]',
-                'div#cf-turnstile iframe',
-                'iframe' # 最后的保底方案
-            ]
-            
+            print("正在扫描所有 Iframe...")
             target_iframe = None
-            for selector in selectors:
+            
+            # 策略：遍历页面上所有的 iframe，寻找符合验证框尺寸特征的那个
+            all_iframes = page.query_selector_all('iframe')
+            for f in all_iframes:
                 try:
-                    target_iframe = page.wait_for_selector(selector, timeout=5000)
-                    if target_iframe:
-                        print(f"成功通过选择器 [{selector}] 找到验证框")
+                    box = f.bounding_box()
+                    # Cloudflare Turnstile 验证框通常宽度在 280-310px，高度在 60-70px
+                    if box and 250 < box['width'] < 350 and 50 < box['height'] < 100:
+                        target_iframe = f
+                        print(f"通过尺寸特征匹配到验证框: w={box['width']}, h={box['height']}")
                         break
                 except:
                     continue
 
             if not target_iframe:
-                print("❌ 无法定位验证框，可能是网络加载失败。")
-                return False
+                print("❌ 自动探测失败，尝试使用通用选择器...")
+                try:
+                    target_iframe = page.wait_for_selector('iframe[title*="Widget"], iframe[src*="challenges"]', timeout=10000)
+                except:
+                    print("❌ 彻底无法定位验证框。")
+                    return False
 
             box = target_iframe.bounding_box()
             if box:
-                print(f"验证框坐标: x={box['x']}, y={box['y']}, w={box['width']}, h={box['height']}")
-                # 针对左侧方块的精准打击
-                # 复选框通常在 iframe 的左侧 1/6 处
-                target_x = box['x'] + 30
+                # 坐标再校准:
+                # 之前点在 30px 处太靠边，点在按钮中心又太靠右。
+                # 复选框小方块中心在 iframe 左边缘起 40-45 像素位置。
+                target_x = box['x'] + 42 
                 target_y = box['y'] + (box['height'] / 2)
                 
-                print("执行网格打击 + Tab 补法...")
-                # 1. 模拟鼠标微扰点击
-                for i in range(5):
-                    page.mouse.click(target_x + (i*2), target_y + (i*2))
+                print(f"执行精准打击: ({target_x}, {target_y})")
+                # 模拟鼠标微小抖动连点，确保触发表单
+                for move in [-2, 0, 2]:
+                    page.mouse.click(target_x + move, target_y + move)
                     time.sleep(0.1)
                 
-                # 2. 模拟键盘交互 (CF 盾对 Tab+Space 响应度很高)
+                # 补一个键盘操作
                 page.keyboard.press("Tab")
                 time.sleep(0.5)
                 page.keyboard.press("Space")
                 
-                print("等待验证状态反馈 (20秒)...")
+                print("等待验证同步...")
                 time.sleep(20)
                 page.screenshot(path="after_bombing.png")
 
-            # 最终尝试点击追加按钮
+            # 最终点击追加按钮
             btn = page.locator('button:has-text("시간 추가")')
             if btn.is_visible():
                 btn.click()
-                print("已点击追加按钮，等待后端响应...")
                 time.sleep(10)
             
             content = page.content()
@@ -100,13 +95,12 @@ def add_server_time(server_url="https://hub.weirdhost.xyz/server/20a83c55"):
                 page.screenshot(path="final_success.png")
                 return True
             else:
-                print("⚠️ 警告：任务未显示成功，请检查 screenshots。")
-                page.screenshot(path="failed_at_last.png")
+                print("⚠️ 警告：未检测到成功提示。")
+                page.screenshot(path="failed_check.png")
                 return False
 
         except Exception as e:
             print(f"运行异常: {e}")
-            page.screenshot(path="error.png")
             return False
         finally:
             browser.close()
