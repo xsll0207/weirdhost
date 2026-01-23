@@ -22,20 +22,16 @@ def add_server_time(server_url="https://hub.weirdhost.xyz/server/20a83c55"):
         # --- 2. 配置启动参数 (含代理) ---
         launch_args = {
             "headless": True,
-            "args": [
-                '--disable-blink-features=AutomationControlled', 
-                '--no-sandbox', 
-                '--window-size=1920,1080'
-            ]
+            # Firefox 的参数略有不同，不需要禁用 blink features
+            "args": ['--window-size=1920,1080'] 
         }
 
-        # 如果环境变量里有代理 IP，则配置代理
+        # 配置 SOCKS5 代理
         if proxy_host and proxy_port:
-            print(f"配置 SOCKS5 代理: {proxy_host}:{proxy_port}")
+            print(f"配置 SOCKS5 代理 (Firefox引擎): {proxy_host}:{proxy_port}")
             proxy_config = {
                 "server": f"socks5://{proxy_host}:{proxy_port}"
             }
-            # 如果有账号密码，添加认证
             if proxy_user and proxy_pass:
                 proxy_config["username"] = proxy_user
                 proxy_config["password"] = proxy_pass
@@ -44,15 +40,18 @@ def add_server_time(server_url="https://hub.weirdhost.xyz/server/20a83c55"):
         else:
             print("未检测到代理配置，使用直连模式。")
 
-        # 启动浏览器
-        browser = p.chromium.launch(**launch_args)
+        # 【核心修改】使用 Firefox 启动，因为它支持 SOCKS5 认证
+        browser = p.firefox.launch(**launch_args)
 
+        # Firefox 的 User-Agent 最好也对应改一下，虽然用 Chrome 的也没事
         context = browser.new_context(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:122.0) Gecko/20100101 Firefox/122.0",
             viewport={'width': 1920, 'height': 1080},
             locale='ko-KR', timezone_id='Asia/Seoul'
         )
+        # Firefox 不需要隐藏 webdriver 属性，它默认隐藏得更好，但保留这行也没坏处
         context.add_init_script("Object.defineProperty(navigator, 'webdriver', { get: () => undefined });")
+        
         page = context.new_page()
         page.set_default_timeout(60000)
 
@@ -67,7 +66,6 @@ def add_server_time(server_url="https://hub.weirdhost.xyz/server/20a83c55"):
                 }])
             
             print(f"访问: {server_url}")
-            # 增加 timeout 防止代理速度慢导致超时
             page.goto(server_url, wait_until="networkidle", timeout=90000)
 
             if "login" in page.url or "auth" in page.url:
@@ -82,7 +80,7 @@ def add_server_time(server_url="https://hub.weirdhost.xyz/server/20a83c55"):
             # --- 4. 核心：网格地毯式轰炸 (Grid Bombing) ---
             print("等待页面元素加载...")
             add_button = page.locator('button:has-text("시간 추가")')
-            add_button.wait_for(state='visible', timeout=60000) # 代理可能慢，增加等待时间
+            add_button.wait_for(state='visible', timeout=60000)
             add_button.scroll_into_view_if_needed()
 
             # [布局稳定锁]
@@ -132,7 +130,7 @@ def add_server_time(server_url="https://hub.weirdhost.xyz/server/20a83c55"):
                             break
                     
                     print("轰炸结束，等待验证生效...")
-                    time.sleep(8) # 代理网络可能有延迟，多等一会
+                    time.sleep(8) 
                     page.screenshot(path="after_grid_click.png")
 
             # --- 5. 点击续期 ---
@@ -154,7 +152,7 @@ def add_server_time(server_url="https://hub.weirdhost.xyz/server/20a83c55"):
                     return True
                 return True
             else:
-                print("失败：验证未通过，请检查截图 (可能是代理IP质量不佳)。")
+                print("失败：验证未通过，请检查截图。")
                 page.screenshot(path="failed_proxy.png")
                 return False
 
