@@ -1,4 +1,4 @@
-name: Minecraft一天一续
+name: Minecraft一天一续 (代理模式修复版)
 
 on:
   workflow_dispatch:
@@ -7,9 +7,7 @@ on:
 
 jobs:
   add_time:
-    # 强制回到 22.04，这是最兼容 WARP 的环境
-    runs-on: ubuntu-22.04
-    
+    runs-on: ubuntu-22.04 # 22.04 环境下 WARP 客户端最稳定
     permissions:
       contents: write
 
@@ -17,24 +15,21 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # 1. 启动 WARP (stack 改为 dual 以防 IPv4 路由死锁)
-      - name: Install Cloudflare WARP
-        uses: fscarmen/warp-on-actions@v1.3
-        with:
-          stack: dual
-
-      # 2. 非破坏性修复 DNS
-      # 我们不删除文件，而是直接修改里面的 nameserver，这样不会破坏系统链接
-      - name: Fix DNS and Test
+      # 【核心修复】手动安装官方 WARP 客户端并设为代理模式
+      - name: Setup Cloudflare WARP (Proxy Mode)
         run: |
-          echo "nameserver 8.8.8.8" | sudo tee /etc/resolv.conf
-          echo "nameserver 1.1.1.1" | sudo tee -a /etc/resolv.conf
-          echo "等待网络隧道稳定..."
-          sleep 10
-          echo "检查出口 IP..."
-          curl -s --max-time 10 https://ipinfo.io/ip || echo "IP查询超时，网络可能不稳定"
-          echo "测试 DNS 解析..."
-          nslookup pypi.org || echo "DNS 解析依然失败"
+          curl -fsSl https://pkg.cloudflareclient.com/pubkey.gpg | sudo gpg --yes --dearmor --output /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg
+          echo "deb [signed-by=/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg] https://pkg.cloudflareclient.com/ $(lsb_release -cs) main" | sudo tee /etc/resolv.conf.d/cloudflare-warp.list > /dev/null
+          sudo apt-get update && sudo apt-get install cloudflare-warp -y
+          
+          # 注册并设置为代理模式 (关键：这样不会断开系统网络)
+          warp-cli --accept-tos register
+          warp-cli --accept-tos mode proxy
+          warp-cli --accept-tos connect
+          
+          echo "等待 WARP 代理启动..."
+          sleep 5
+          warp-cli --accept-tos status
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -51,9 +46,13 @@ jobs:
           REMEMBER_WEB_COOKIE: ${{ secrets.REMEMBER_WEB_COOKIE }}
           PTERODACTYL_EMAIL: ${{ secrets.PTERODACTYL_EMAIL }}
           PTERODACTYL_PASSWORD: ${{ secrets.PTERODACTYL_PASSWORD }}
+          # 你的移动代理 IP
           PROXY_HOST: ${{ secrets.PROXY_HOST }}
           PROXY_PORT: ${{ secrets.PROXY_PORT }}
-        run: python Minecraft.py
+        run: |
+          # 关键：通过 ALL_PROXY 让 Python 进程通过 WARP 去连接你的移动代理
+          export ALL_PROXY=socks5://127.0.0.1:40000
+          python Minecraft.py
 
       - name: Upload debug screenshots
         if: always()
