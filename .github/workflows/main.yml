@@ -7,7 +7,9 @@ on:
 
 jobs:
   add_time:
-    runs-on: ubuntu-latest
+    # 强制回到 22.04，这是最兼容 WARP 的环境
+    runs-on: ubuntu-22.04
+    
     permissions:
       contents: write
 
@@ -15,31 +17,24 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # 【核心修复】通过添加 Jammy (22.04) 仓库来安装 openresolv
-      # 这种方式比直接下载 .deb 文件更可靠，不会 404
-      - name: Install openresolv from Jammy repository
-        run: |
-          echo "添加 Ubuntu 22.04 软件源以获取 openresolv..."
-          sudo add-apt-repository "deb http://archive.ubuntu.com/ubuntu/ jammy universe"
-          sudo apt-get update
-          sudo apt-get install -y openresolv wireguard-tools
-          # 安装后移除该源，保持系统洁净
-          sudo add-apt-repository --remove "deb http://archive.ubuntu.com/ubuntu/ jammy universe"
-
-      # 安装 Cloudflare WARP
+      # 1. 启动 WARP (stack 改为 dual 以防 IPv4 路由死锁)
       - name: Install Cloudflare WARP
         uses: fscarmen/warp-on-actions@v1.3
         with:
-          stack: ipv4
+          stack: dual
 
-      # 强制修复 DNS
-      - name: Fix DNS Connection
+      # 2. 非破坏性修复 DNS
+      # 我们不删除文件，而是直接修改里面的 nameserver，这样不会破坏系统链接
+      - name: Fix DNS and Test
         run: |
-          sudo rm -f /etc/resolv.conf
           echo "nameserver 8.8.8.8" | sudo tee /etc/resolv.conf
           echo "nameserver 1.1.1.1" | sudo tee -a /etc/resolv.conf
-          sleep 5
-          ping -c 3 google.com || echo "网络响应较慢，尝试继续..."
+          echo "等待网络隧道稳定..."
+          sleep 10
+          echo "检查出口 IP..."
+          curl -s --max-time 10 https://ipinfo.io/ip || echo "IP查询超时，网络可能不稳定"
+          echo "测试 DNS 解析..."
+          nslookup pypi.org || echo "DNS 解析依然失败"
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -56,7 +51,6 @@ jobs:
           REMEMBER_WEB_COOKIE: ${{ secrets.REMEMBER_WEB_COOKIE }}
           PTERODACTYL_EMAIL: ${{ secrets.PTERODACTYL_EMAIL }}
           PTERODACTYL_PASSWORD: ${{ secrets.PTERODACTYL_PASSWORD }}
-          # 如果 120.x 代理持续失败，建议清空这两个 Secret 走 WARP 直连
           PROXY_HOST: ${{ secrets.PROXY_HOST }}
           PROXY_PORT: ${{ secrets.PROXY_PORT }}
         run: python Minecraft.py
@@ -68,21 +62,13 @@ jobs:
           name: debug-screenshots
           path: "*.png"
 
-      - name: Commit time.txt to repo
+      - name: Commit time.txt
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          if [ ! -f time.txt ]; then
-            echo "首次生成时间：$(date +'%Y-%m-%d %H:%M:%S')" > time.txt
-          else
-            echo "$(date +'%Y-%m-%d %H:%M:%S')" > time.txt
-          fi
+          echo "$(date +'%Y-%m-%d %H:%M:%S')" > time.txt
           git add time.txt
-          if git diff --cached --quiet; then
-            echo "无变化"
-          else
-            git commit -m "🚀 更新时间: $(date +'%Y-%m-%d %H:%M:%S')"
-            git push origin HEAD:main
-          fi
+          git commit -m "🚀 更新时间: $(date +'%Y-%m-%d %H:%M:%S')" || exit 0
+          git push origin HEAD:main
