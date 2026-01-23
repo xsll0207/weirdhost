@@ -7,7 +7,10 @@ on:
 
 jobs:
   add_time:
-    runs-on: ubuntu-latest
+    # 【核心修复】将 ubuntu-latest 改为 ubuntu-22.04
+    # 22.04 版本包含 openresolv 依赖，能让 WARP 正常安装
+    runs-on: ubuntu-22.04
+    
     permissions:
       contents: write
 
@@ -15,13 +18,11 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # 【新增】安装 Cloudflare WARP
-      # 这会为 GHA 环境套上一层 Cloudflare 的 CF IP，
-      # 帮助你的代理 IP (120.xxx) 识别出这是"正常流量"而非 Azure 数据中心流量。
+      # 安装 Cloudflare WARP (用于更换出口 IP)
       - name: Install Cloudflare WARP
         uses: fscarmen/warp-on-actions@v1.3
         with:
-          stack: ipv4 # 强制 IPv4，适配你的代理
+          stack: ipv4
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -39,12 +40,12 @@ jobs:
           REMEMBER_WEB_COOKIE: ${{ secrets.REMEMBER_WEB_COOKIE }}
           PTERODACTYL_EMAIL: ${{ secrets.PTERODACTYL_EMAIL }}
           PTERODACTYL_PASSWORD: ${{ secrets.PTERODACTYL_PASSWORD }}
-          # 代理 IP 配置 (已删除账号密码)
+          # 代理 IP 配置
           PROXY_HOST: ${{ secrets.PROXY_HOST }}
           PROXY_PORT: ${{ secrets.PROXY_PORT }}
         run: python Minecraft.py
 
-      # 调试截图 (不管成功失败都上传)
+      # 调试截图
       - name: Upload debug screenshots
         if: always()
         uses: actions/upload-artifact@v4
