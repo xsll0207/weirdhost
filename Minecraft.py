@@ -3,7 +3,7 @@ import time
 from playwright.sync_api import sync_playwright
 
 def add_server_time(server_url="https://hub.weirdhost.xyz/server/20a83c55"):
-    # --- 1. 获取登录和代理凭据 ---
+    # --- 1. 获取凭据 ---
     remember_web_cookie = os.environ.get('REMEMBER_WEB_COOKIE')
     pterodactyl_email = os.environ.get('PTERODACTYL_EMAIL')
     pterodactyl_password = os.environ.get('PTERODACTYL_PASSWORD')
@@ -19,37 +19,45 @@ def add_server_time(server_url="https://hub.weirdhost.xyz/server/20a83c55"):
         return False
 
     with sync_playwright() as p:
-        # --- 2. 配置启动参数 (含代理) ---
-        launch_args = {
+        # --- 2. 配置 Firefox 启动参数 (使用 Prefs 注入代理) ---
+        launch_options = {
             "headless": True,
-            # Firefox 的参数略有不同，不需要禁用 blink features
-            "args": ['--window-size=1920,1080'] 
+            "args": ['--window-size=1920,1080']
         }
 
-        # 配置 SOCKS5 代理
+        # 【核心修改】通过 Firefox 内部参数注入 SOCKS5 代理
+        # 这样可以绕过 Playwright 的 "does not support socks5 authentication" 报错
         if proxy_host and proxy_port:
-            print(f"配置 SOCKS5 代理 (Firefox引擎): {proxy_host}:{proxy_port}")
-            proxy_config = {
-                "server": f"socks5://{proxy_host}:{proxy_port}"
-            }
-            if proxy_user and proxy_pass:
-                proxy_config["username"] = proxy_user
-                proxy_config["password"] = proxy_pass
-            
-            launch_args["proxy"] = proxy_config
+            print(f"配置 Firefox 底层代理: {proxy_host}:{proxy_port}")
+            try:
+                port_int = int(proxy_port) # 端口必须是整数
+                launch_options["firefox_user_prefs"] = {
+                    "network.proxy.type": 1,               # 1 = 手动配置代理
+                    "network.proxy.socks": proxy_host,     # SOCKS 主机
+                    "network.proxy.socks_port": port_int,  # SOCKS 端口
+                    "network.proxy.socks_version": 5,      # SOCKS5
+                    "network.proxy.socks_remote_dns": True # 远程解析 DNS (防泄漏)
+                }
+                
+                # 如果有账号密码，注入认证信息
+                if proxy_user and proxy_pass:
+                    launch_options["firefox_user_prefs"]["network.proxy.socks_username"] = proxy_user
+                    launch_options["firefox_user_prefs"]["network.proxy.socks_password"] = proxy_pass
+            except ValueError:
+                print("错误: 代理端口不是有效的数字。")
+                return False
         else:
             print("未检测到代理配置，使用直连模式。")
 
-        # 【核心修改】使用 Firefox 启动，因为它支持 SOCKS5 认证
-        browser = p.firefox.launch(**launch_args)
+        # 启动 Firefox
+        browser = p.firefox.launch(**launch_options)
 
-        # Firefox 的 User-Agent 最好也对应改一下，虽然用 Chrome 的也没事
         context = browser.new_context(
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:122.0) Gecko/20100101 Firefox/122.0",
             viewport={'width': 1920, 'height': 1080},
             locale='ko-KR', timezone_id='Asia/Seoul'
         )
-        # Firefox 不需要隐藏 webdriver 属性，它默认隐藏得更好，但保留这行也没坏处
+        # Firefox 默认隐藏 webdriver，不需要额外脚本，但保留无妨
         context.add_init_script("Object.defineProperty(navigator, 'webdriver', { get: () => undefined });")
         
         page = context.new_page()
@@ -66,10 +74,11 @@ def add_server_time(server_url="https://hub.weirdhost.xyz/server/20a83c55"):
                 }])
             
             print(f"访问: {server_url}")
+            # 增加超时时间，代理连接可能较慢
             page.goto(server_url, wait_until="networkidle", timeout=90000)
 
             if "login" in page.url or "auth" in page.url:
-                print("Cookie失效或未设置，转入账号密码登录...")
+                print("Cookie 失效或未设置，转入账号密码登录...")
                 if not (pterodactyl_email and pterodactyl_password): return False
                 page.fill('input[name="username"]', pterodactyl_email)
                 page.fill('input[name="password"]', pterodactyl_password)
@@ -77,7 +86,7 @@ def add_server_time(server_url="https://hub.weirdhost.xyz/server/20a83c55"):
                 page.click('button[type="submit"]')
                 page.wait_for_url("**/server/**", timeout=60000)
 
-            # --- 4. 核心：网格地毯式轰炸 (Grid Bombing) ---
+            # --- 4. 核心：网格地毯式轰炸 (V7 逻辑) ---
             print("等待页面元素加载...")
             add_button = page.locator('button:has-text("시간 추가")')
             add_button.wait_for(state='visible', timeout=60000)
@@ -99,7 +108,7 @@ def add_server_time(server_url="https://hub.weirdhost.xyz/server/20a83c55"):
                 time.sleep(0.5)
             print("布局已稳定。")
 
-            # [网格轰炸逻辑]
+            # [网格轰炸]
             if add_button.is_enabled():
                 print("按钮已亮，直接点击！")
             else:
@@ -108,11 +117,11 @@ def add_server_time(server_url="https://hub.weirdhost.xyz/server/20a83c55"):
                     start_x = box['x']
                     start_y = box['y']
                     
-                    # 扩大覆盖范围：覆盖复选框 + 文字
+                    # 扩大覆盖范围 (V7 Grid Bombing)
                     x_offsets = [10, 35, 60, 85, 110] 
                     y_offsets = [30, 45, 60, 75]
                     
-                    print(f"开始通过代理执行 {len(x_offsets)*len(y_offsets)} 点网格轰炸...")
+                    print(f"开始执行网格轰炸 ({len(x_offsets)*len(y_offsets)}次点击)...")
                     
                     for y_off in y_offsets:
                         for x_off in x_offsets:
@@ -152,7 +161,7 @@ def add_server_time(server_url="https://hub.weirdhost.xyz/server/20a83c55"):
                     return True
                 return True
             else:
-                print("失败：验证未通过，请检查截图。")
+                print("失败：验证未通过，请检查截图 (可能是代理IP已被拉黑)。")
                 page.screenshot(path="failed_proxy.png")
                 return False
 
