@@ -1,140 +1,74 @@
-import os
-import time
-from playwright.sync_api import sync_playwright
+name: Minecraft一天一续
 
-def add_server_time(server_url="https://hub.weirdhost.xyz/server/20a83c55"):
-    remember_web_cookie = os.environ.get('REMEMBER_WEB_COOKIE')
-    pterodactyl_email = os.environ.get('PTERODACTYL_EMAIL')
-    pterodactyl_password = os.environ.get('PTERODACTYL_PASSWORD')
+on:
+  workflow_dispatch: # 允许在 Actions 页面手动触发此工作流，方便测试
+  schedule:
+    # 使用 CRON 表达式定义定时任务，所有时间均为 UTC 时间。
+    # '0 4 * * *' 表示在 UTC 时间的每天凌晨4点执行。
+    # 如果您位于东八区（如北京时间），这对应您本地时间的每天中午12点。
+    # 如果您在其他时区，请相应调整。例如东九区（东京/首尔时间）中午12点是UTC时间3点，应为 '0 3 * * *'。
+    - cron: '1 0 * * *'
 
-    if not (remember_web_cookie or (pterodactyl_email and pterodactyl_password)):
-        print("错误: 缺少登录凭据。")
-        return False
+jobs:
+  add_time:
+    runs-on: ubuntu-latest # 在最新的 Ubuntu 环境上运行
 
-    with sync_playwright() as p:
-        # 1. 启动浏览器（必须 headed 才能让你手动点 CF）
-        browser = p.chromium.launch(
-            headless=False,
-            args=[
-                '--disable-blink-features=AutomationControlled',
-                '--no-sandbox',
-                '--window-size=1920,1080',
-            ]
-        )
-        context = browser.new_context(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
-            viewport={'width': 1920, 'height': 1080},
-            locale='ko-KR',
-            timezone_id='Asia/Seoul'
-        )
-        context.add_init_script("Object.defineProperty(navigator, 'webdriver', { get: () => undefined });")
-        page = context.new_page()
-        page.set_default_timeout(60000)
+    # 【【【 核心修改点在这里 】】】
+    # 授予工作流写入仓库内容的权限
+    permissions:
+      contents: write
 
-        try:
-            # 2. 登录逻辑
-            if remember_web_cookie:
-                context.add_cookies([{
-                    'name': 'remember_web_59ba36addc2b2f9401580f014c7f58ea4e30989d',
-                    'value': remember_web_cookie,
-                    'domain': 'hub.weirdhost.xyz',
-                    'path': '/',
-                    'expires': int(time.time()) + 31536000,
-                    'httpOnly': True,
-                    'secure': True,
-                    'sameSite': 'Lax'
-                }])
+    steps:
+      - name: Checkout repository # 步骤1: 检出（下载）你的代码到运行环境中
+        uses: actions/checkout@v4
 
-            print(f"访问: {server_url}")
-            page.goto(server_url, wait_until="domcontentloaded")
+      - name: Set up Python # 步骤2: 设置 Python 环境
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x' # 使用最新的 Python 3
 
-            if "login" in page.url or "auth" in page.url:
-                print("转入账号密码登录...")
-                if not (pterodactyl_email and pterodactyl_password):
-                    return False
-                page.fill('input[name="username"]', pterodactyl_email)
-                page.fill('input[name="password"]', pterodactyl_password)
-                page.click('button[type="submit"]')
-                page.wait_for_url("**/server/**", timeout=30000)
+      - name: Install Playwright and dependencies # 步骤3: 安装 Playwright 及其浏览器依赖
+        run: |
+          pip install playwright
+          playwright install --with-deps chromium # 安装 Chromium 浏览器及其运行所需的所有依赖
 
-            # ====== 3. 检测 CF 验证并等待你手动点击 ======
-            # 只做“检测 + 暂停”，不做自动点（合规做法）
-            def wait_for_human_complete_cf(timeout_sec=300):
-                """
-                检测到疑似 CF challenge/Turnstile 时，截图并暂停等待你手动完成。
-                返回 True 表示未检测到或已完成，False 表示超时。
-                """
-                start = time.time()
-                while time.time() - start < timeout_sec:
-                    # 常见 CF 挑战 iframe 域名（只用于检测是否出现）
-                    cf_iframe = page.locator('iframe[src*="challenges.cloudflare.com"]')
-                    # 页面上常见的“请确认你是人类”文案（韩文/英文都可能）
-                    cf_text = page.locator('text=/사람인지 확인|Verify you are human|Checking your browser/i')
+      - name: Run Time Adder Script # 步骤4: 运行你的 Python 脚本
+        env:
+          # 从 GitHub Secrets 读取环境变量，这些值绝不会在日志中明文显示
+          # 优先使用 Cookie 登录
+          REMEMBER_WEB_COOKIE: ${{ secrets.REMEMBER_WEB_COOKIE }}
+          # 如果 Cookie 失效或未设置，则使用下面的邮箱和密码
+          PTERODACTYL_EMAIL: ${{ secrets.PTERODACTYL_EMAIL }}
+          PTERODACTYL_PASSWORD: ${{ secrets.PTERODACTYL_PASSWORD }}
+        run: python Minecraft.py
 
-                    # 如果检测到挑战存在
-                    if cf_iframe.count() > 0 or cf_text.count() > 0:
-                        print("检测到 Cloudflare 人机验证。请你在弹出的浏览器窗口里手动完成验证。")
-                        page.screenshot(path="cf_detected.png", full_page=True)
-                        print("已保存截图 cf_detected.png")
-                        input("完成验证后回到终端按回车继续...")
+      - name: Upload error artifacts # 步骤5: 如果脚本运行失败，上传截图用于调试
+        if: always() # 仅在上一步失败时运行
+        uses: actions/upload-artifact@v4
+        with:
+          name: error-screenshots # 上传后的文件包名称
+          path: "*.png" # 上传所有以 .png 结尾的文件
 
-                        # 给验证生效一点时间
-                        time.sleep(2)
+      - name: Commit time.txt to repo
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
 
-                        # 再检测一次：如果不见了就认为完成
-                        if cf_iframe.count() == 0 and cf_text.count() == 0:
-                            print("CF 验证似乎已完成，继续执行。")
-                            return True
+          # 如果 time.txt 不存在，说明是第一次运行
+          if [ ! -f time.txt ]; then
+            echo "首次生成时间：$(date +'%Y-%m-%d %H:%M:%S')" > time.txt
+          else
+            echo "$(date +'%Y-%m-%d %H:%M:%S')" > time.txt
+          fi
 
-                        # 还在：继续循环让你再点
-                        print("验证似乎仍存在，可能需要再次操作。")
-                    else:
-                        # 未检测到 CF，直接通过
-                        return True
+          git add time.txt
 
-                    time.sleep(1)
-
-                print("等待手动验证超时。")
-                page.screenshot(path="cf_timeout.png", full_page=True)
-                return False
-
-            if not wait_for_human_complete_cf(timeout_sec=600):
-                return False
-
-            # ====== 4. 点击续期按钮 ======
-            print("等待页面元素加载...")
-            add_button = page.locator('button:has-text("시간 추가")')
-            add_button.wait_for(state='visible', timeout=30000)
-            add_button.scroll_into_view_if_needed()
-
-            # 再次确认可点
-            if not add_button.is_enabled():
-                print("시간 추가 按钮不可用，可能验证未生效或页面未刷新。尝试刷新一次。")
-                page.reload(wait_until="domcontentloaded")
-                time.sleep(2)
-                add_button = page.locator('button:has-text("시간 추가")')
-                add_button.wait_for(state='visible', timeout=30000)
-                add_button.scroll_into_view_if_needed()
-
-            if add_button.is_enabled():
-                print("点击续期...")
-                add_button.click()
-                time.sleep(3)
-                page.screenshot(path="final_result.png", full_page=True)
-                print("已保存 final_result.png")
-                return True
-            else:
-                print("失败：시간 추가 仍不可点击。")
-                page.screenshot(path="failed_final.png", full_page=True)
-                return False
-
-        except Exception as e:
-            print(f"脚本异常: {e}")
-            page.screenshot(path="error_crash.png", full_page=True)
-            return False
-        finally:
-            context.close()
-            browser.close()
-
-if __name__ == "__main__":
-    raise SystemExit(0 if add_server_time() else 1)
+          # 如果有更改再提交
+          if git diff --cached --quiet; then
+            echo "无变化，无需提交"
+          else
+            git commit -m "?? 更新时间文件: $(date +'%Y-%m-%d %H:%M:%S')"
+            git push origin HEAD:main
+          fi
