@@ -14,7 +14,7 @@ def add_server_time(server_url="https://hub.weirdhost.xyz/server/20a83c55"):
         return False
 
     with sync_playwright() as p:
-        # 2. 浏览器启动配置 (保持之前的反检测配置)
+        # 2. 浏览器启动配置 (隐身模式)
         browser = p.chromium.launch(
             headless=True,
             args=[
@@ -33,7 +33,7 @@ def add_server_time(server_url="https://hub.weirdhost.xyz/server/20a83c55"):
             timezone_id='Asia/Seoul'
         )
         
-        # 注入 JS 进一步隐藏 webdriver
+        # 注入 JS 隐藏 webdriver 特征
         context.add_init_script("""
             Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
         """)
@@ -46,7 +46,7 @@ def add_server_time(server_url="https://hub.weirdhost.xyz/server/20a83c55"):
             if remember_web_cookie:
                 print("尝试 Cookie 登录...")
                 context.add_cookies([{
-                    'name': 'remember_web_59ba36addc2b2f9401580f014c7f58ea4e30989d', # 确保这个名字是你最新的
+                    'name': 'remember_web_59ba36addc2b2f9401580f014c7f58ea4e30989d', # 确保此处是你最新的 Cookie Name
                     'value': remember_web_cookie,
                     'domain': 'hub.weirdhost.xyz',
                     'path': '/',
@@ -57,7 +57,6 @@ def add_server_time(server_url="https://hub.weirdhost.xyz/server/20a83c55"):
             print(f"访问页面: {server_url}")
             page.goto(server_url, wait_until="networkidle")
 
-            # 登录检查
             if "login" in page.url or "auth" in page.url:
                 print("Cookie 失效，转入账号密码登录...")
                 if not (pterodactyl_email and pterodactyl_password):
@@ -69,80 +68,75 @@ def add_server_time(server_url="https://hub.weirdhost.xyz/server/20a83c55"):
                 page.wait_for_url("**/server/**", timeout=30000)
                 print("登录成功。")
 
-            # --- 4. 暴力处理 Cloudflare (核心修改) ---
-            print("正在寻找 Cloudflare 验证框...")
-            time.sleep(5) # 等待 iframe 完全加载
+            # --- 4. 核心修改：使用键盘 TAB 键定位 Cloudflare ---
+            # 这种方法不受页面广告加载导致的布局位移影响
+            
+            # 定位目标按钮
+            add_button_selector = 'button:has-text("시간 추가")'
+            print("等待 '시간 추가' 按钮加载...")
+            add_button = page.locator(add_button_selector)
+            add_button.wait_for(state='visible', timeout=30000)
+            
+            # 滚动到底部，确保元素都在视口内
+            add_button.scroll_into_view_if_needed()
+            time.sleep(2) # 等待页面滚动稳定
 
-            # 策略：直接找 iframe 标签，获取它的坐标，然后点它的正中心
-            # 这种方法不依赖 iframe 内部结构，最稳
+            print("策略：聚焦按钮 -> Shift+Tab 反向跳到验证框 -> 空格键激活")
             
-            # 尝试定位 Cloudflare 的 iframe
-            cf_iframe_locator = page.locator("iframe[src*='turnstile'], iframe[src*='cloudflare']")
+            # 1. 聚焦到 "시간 추가" 按钮 (但不点击)
+            add_button.focus()
+            time.sleep(0.5)
             
-            if cf_iframe_locator.count() > 0:
-                print(f"检测到 {cf_iframe_locator.count()} 个验证框 iframe。")
-                # 通常是第一个
-                frame_element = cf_iframe_locator.first
-                
-                # 获取 iframe 在屏幕上的坐标盒子 (x, y, width, height)
-                box = frame_element.bounding_box()
-                
-                if box:
-                    print(f"验证框坐标: {box}")
-                    # 计算中心点
-                    click_x = box['x'] + box['width'] / 2
-                    click_y = box['y'] + box['height'] / 2
-                    
-                    print(f"移动鼠标至验证框中心 ({click_x}, {click_y}) 并点击...")
-                    page.mouse.move(click_x, click_y)
-                    time.sleep(0.5)
-                    page.mouse.down()
-                    time.sleep(0.1)
-                    page.mouse.up()
-                    
-                    print("点击动作已执行，等待 10 秒让验证通过...")
-                    time.sleep(10)
-                    
-                    # 截图看看验证框是否打钩了
-                    page.screenshot(path="after_captcha_click.png")
-                else:
-                    print("无法获取验证框坐标，可能不可见。")
-            else:
-                print("未检测到明显的 Cloudflare iframe，尝试继续...")
+            # 2. 按 Shift + Tab (焦点倒退，理论上会跳到上方的 Cloudflare 框)
+            # 我们多按几次确保跳进去，通常 1 次或 2 次
+            page.keyboard.press("Shift+Tab")
+            time.sleep(0.5)
+            
+            # 3. 按空格键 (Space) 激活当前焦点 (即勾选验证框)
+            print("尝试激活验证框...")
+            page.keyboard.press("Space")
+            
+            # 备用方案：万一它是跳两次，我们可以再尝试一次循环
+            # 但通常 Cloudflare 就在提交按钮的正上方，一次 Shift+Tab 就够了
+            
+            print("已发送激活指令，等待 10 秒让 Cloudflare 反应...")
+            time.sleep(10)
+            page.screenshot(path="after_tab_check.png") # 截图查看是否打钩
 
             # --- 5. 点击续期按钮 ---
-            add_button_selector = 'button:has-text("시간 추가")'
-            add_button = page.locator(add_button_selector)
-            
-            print("等待 '시간 추가' 按钮...")
-            add_button.wait_for(state='visible', timeout=30000)
-            add_button.scroll_into_view_if_needed()
-
-            # 再次检查按钮状态，有些面板验证未通过时按钮是灰的
+            # 检查按钮状态
             if not add_button.is_enabled():
-                print("错误：按钮仍处于禁用状态，说明验证未通过。请查看 after_captcha_click.png")
-                return True # 返回 True 避免 Action 报错，但实际失败
-
-            print("点击续期按钮...")
-            # 同样使用坐标点击按钮，防止被透明层遮挡
-            btn_box = add_button.bounding_box()
-            if btn_box:
-                 page.mouse.click(btn_box['x'] + btn_box['width'] / 2, btn_box['y'] + btn_box['height'] / 2)
-            else:
-                 add_button.click()
-
-            # 等待结果
-            time.sleep(5)
-            page.screenshot(path="final_result_v2.png")
+                print("按钮仍禁用，尝试再次 Tab 激活...")
+                # 如果失败，可能是焦点没对准，尝试暴力 Tab 遍历
+                # 重置焦点到按钮
+                add_button.focus()
+                # 连续反向 Tab 寻找
+                for _ in range(3):
+                    page.keyboard.press("Shift+Tab")
+                    time.sleep(0.2)
+                    page.keyboard.press("Space")
+                    time.sleep(1)
+                time.sleep(5)
             
-            # 检查是否有成功提示
-            content = page.content()
-            if "success" in content.lower() or "extended" in content.lower():
-                print("检测到成功信号！")
+            if add_button.is_enabled():
+                print("按钮已启用，准备点击续期...")
+                add_button.click()
+                
+                # 等待成功反馈
+                time.sleep(5)
+                page.screenshot(path="final_success.png")
+                
+                # 验证页面文字
+                content = page.content()
+                if "success" in content.lower() or "extended" in content.lower():
+                    print("检测到成功信号！")
+                    return True
+                else:
+                    print("点击完成，请检查 final_success.png 确认结果。")
+                    return True
             else:
-                print("未检测到明确成功文字，请检查截图。")
-
-            return True
+                print("错误：验证框未能通过，按钮依然禁用。")
+                return False
 
         except Exception as e:
             print(f"脚本执行出错: {e}")
