@@ -1,12 +1,24 @@
 import os
 import time
 from playwright.sync_api import sync_playwright
-# 修正导入方式：明确导入同步模式所需的 stealth_sync 函数
+
+# --- 动态导入修复方案 ---
 try:
-    from playwright_stealth import stealth_sync
-except ImportError:
-    # 兼容部分版本的导入方式
-    from playwright_stealth import stealth_sync as stealth_sync
+    import playwright_stealth
+    # 定义一个统一的调用函数
+    def apply_stealth(page):
+        if hasattr(playwright_stealth, 'stealth_sync'):
+            playwright_stealth.stealth_sync(page)
+        elif hasattr(playwright_stealth, 'stealth'):
+            # 如果 stealth 是个模块，尝试调用里面的函数
+            if callable(playwright_stealth.stealth):
+                playwright_stealth.stealth(page)
+            else:
+                playwright_stealth.stealth.stealth(page)
+        print("Stealth 隐身特征已注入")
+except Exception as e:
+    print(f"Stealth 注入跳过 (非致命错误): {e}")
+    def apply_stealth(page): pass
 
 def add_server_time(server_url="https://hub.weirdhost.xyz/server/20a83c55"):
     cookie_value = os.environ.get('REMEMBER_WEB_COOKIE')
@@ -24,8 +36,8 @@ def add_server_time(server_url="https://hub.weirdhost.xyz/server/20a83c55"):
         )
         
         page = context.new_page()
-        # 使用正确的函数隐藏自动化特征
-        stealth_sync(page)
+        # 调用修复后的隐身函数
+        apply_stealth(page)
         
         if cookie_value:
             context.add_cookies([{
@@ -39,7 +51,6 @@ def add_server_time(server_url="https://hub.weirdhost.xyz/server/20a83c55"):
             print(f"正在访问控制台: {server_url}")
             page.goto(server_url, wait_until="domcontentloaded", timeout=60000)
             
-            # 等待渲染，预留时间给 Cloudflare 盾
             print("等待 15 秒让验证框稳定...")
             time.sleep(15) 
             
@@ -49,34 +60,34 @@ def add_server_time(server_url="https://hub.weirdhost.xyz/server/20a83c55"):
             box = button.bounding_box()
             
             if box:
-                # 重新校准：针对 failed_check.png 中复选框方框的精准点击
-                print("执行网格轰炸 3.2 (覆盖复选框核心区域)...")
-                # 按钮左边缘是 box['x']，复选框中心约在左移 30px 左右
-                x_targets = [box['x'] + 25, box['x'] + 35, box['x'] + 45]
-                y_targets = [box['y'] - 55, box['y'] - 60, box['y'] - 65]
+                # 网格轰炸 3.3：进一步向左修正坐标
+                print("执行网格轰炸 3.3 (精准覆盖左侧方框)...")
+                # 按钮左边缘是 box['x']。复选框在左侧，通常位于 x+20 到 x+50 之间
+                x_targets = [box['x'] + 22, box['x'] + 32, box['x'] + 42, box['x'] + 52]
+                # 纵向高度覆盖 45px 到 70px
+                y_targets = [box['y'] - 52, box['y'] - 58, box['y'] - 64, box['y'] - 70]
                 
                 for ty in y_targets:
                     for tx in x_targets:
                         page.mouse.click(tx, ty)
                         time.sleep(0.1) 
                 
-                print("点击完成，预留 15 秒观察打钩状态...")
+                print("点击完成，等待 15 秒观察是否打钩...")
                 time.sleep(15) 
                 page.screenshot(path="after_bombing.png")
 
-            # 执行续期点击
+            # 最终确认逻辑
             print("尝试最终续期点击...")
             button.click()
-            time.sleep(8)
+            time.sleep(10)
             
-            # 结果深度校验
             content = page.content()
             if "성공" in content or "Success" in content:
-                print("✅ 确认：续期任务完全成功！")
+                print("✅ 确认成功：服务器时长已增加！")
                 page.screenshot(path="final_success.png")
                 return True
             else:
-                print("⚠️ 警告：点击完成但未检测到成功提示，请检查 after_bombing.png 是否打钩。")
+                print("⚠️ 警告：续期未检测到成功文字，请检查 after_bombing.png")
                 page.screenshot(path="failed_check.png")
                 return False
 
